@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import openai
 import discord
+from discord.ext import commands
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -116,8 +117,8 @@ Assume that these are valid activities and log them accordingly.
 
 # Text response
 
-You may return a response in the `text_response` field to reply to the user.
-Do not respond to a user unless prompted to do so.
+You may return a response in the `text_response` field to reply to a user.
+Do not respond to a user unless directly prompted to do so.
 """
 
 previous_response_id = None  # This will be set to the ID of the previous response if needed
@@ -251,9 +252,9 @@ new_points_to_emoji_map = {
     6: "6️⃣",
 }
 
-async def print_table_of_scores() -> None:
+def get_table_of_points() -> str:
     """
-    Print a markdown table of scores for all users.
+    get a table of scores for all users.
     """
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
@@ -264,35 +265,31 @@ async def print_table_of_scores() -> None:
         ''')
         rows = cursor.fetchall()
 
-    if not rows:
-        log.info("No activities found.")
-        return
-
     content = ""
-
-    content += "| User ID | Points |\n"
-    content += "|---------|--------|\n"
     for row in rows:
-        content += f"| {row[0]} | {row[1]} |\n"
+        content += f"- {row[0]}: {row[1]}\n"
 
-    print(content)
+    return content
+
 
 intents = discord.Intents.default()
 intents.message_content = True
-
-bot_client = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # get messages from the #challenges channel
-@bot_client.event
+@bot.event
 async def on_ready():
-    log.info(f'Logged in as {bot_client.user} (ID: {bot_client.user.name})')
+    log.info(f'Logged in as {bot.user} (ID: {bot.user.name})')
 
-    channel = bot_client.get_channel(1378516451987816538) # challenges channel ID
+    channel = bot.get_channel(1378516451987816538) # challenges channel ID
     async for message in channel.history(limit=None, after=datetime.datetime(2025, 7, 1)):
         await parse_message(message)
 
-@bot_client.event
+@bot.event
 async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
     response = await parse_message(message)
     if response is not None and response.text_response:
         try:
@@ -300,9 +297,25 @@ async def on_message(message: discord.Message):
         except Exception as e:
             log.exception(f"An error occurred while replying to message {message.id}: {e}")
 
+    await bot.process_commands(message)
 
-async def parse_message(message: discord.Message) -> None:
-    if message.author == bot_client.user:
+
+@bot.command()
+async def points(ctx: commands.Context) -> None:
+    """
+    Command to print the points table in the channel.
+    """
+    log.info(f"Points command called by {ctx.author.name} in channel {ctx.channel.name}")
+    if ctx.channel.name != "challenges":
+        await ctx.respond("This command can only be used in the #challenges channel.")
+        return
+
+    content = get_table_of_points()
+    await ctx.send(content)
+
+
+async def parse_message(message: discord.Message) -> Response | None:
+    if message.author == bot.user:
         return
 
     if message.channel.name != "challenges":
@@ -364,13 +377,13 @@ if __name__ == "__main__":
             exit(0)
         elif sys.argv[1] == "scores":
             # print scores
-            asyncio.run(print_table_of_scores())
+            print(get_table_of_points())
             exit(0)
 
     initialize_db()
 
     try:
-        bot_client.run(os.environ["DISCORD_BOT_TOKEN"])
+        bot.run(os.environ["DISCORD_BOT_TOKEN"])
     except discord.LoginFailure:
         log.exception(f"Failed to login to Discord")
     except Exception:
