@@ -22,7 +22,7 @@ load_dotenv()
 
 llm_client = openai.Client(
     api_key=os.getenv("OPENAI_API_KEY"),
-    organization=os.getenv("OPENAI_ORGANIZATION_ID")
+    organization=os.getenv("OPENAI_ORGANIZATION_ID"),
 )
 
 DB_FILE = "activity_log.db"
@@ -38,9 +38,9 @@ class ActivityType(Enum):
 
 max_activity_points = {
     ActivityType.workout: 6,
-    #ActivityType.throwing no limit
+    # ActivityType.throwing no limit
     ActivityType.watching: 2,
-    #ActivityType.bonding no limit
+    # ActivityType.bonding no limit
 }
 
 activity_points = {
@@ -49,6 +49,7 @@ activity_points = {
     ActivityType.watching: 2,  # per game or media watched
     ActivityType.bonding: 2,  # per person involved
 }
+
 
 class ActivityLogResponse(BaseModel):
     activity_type: ActivityType
@@ -59,7 +60,7 @@ class ActivityLogResponse(BaseModel):
 
 class Response(BaseModel):
     activities: list[ActivityLogResponse]
-    text_response: str | None = None
+    # text_response: str | None = None
 
 
 prompt_text = f"""
@@ -77,9 +78,11 @@ Some messages may not be activities, and in that case you should respond with an
   - running, biking, weightlifting, physical therapy, etc. MUFA (league) games and pickup ultimate count.
   - A message such as "PT" (physical therapy), "lifting", "workout" should be logged as a workout.
   - Dog walking/running does count as a workout.
+  - Playing sports (any) counts as a workout.
 - Throwing (`ActivityType.throwing`)
   - throwing a frisbee either alone or with others.
-  - each activity should be logged for each 15 minutes of throwing.
+  - each activity should be logged for each 15 minutes of throwing.  Record separate activities for each 15 minutes
+    for each person throwing.
 - Watching Frisbee (`ActivityType.watching`)
   - watching ultimate frisbee games, whether on youtube/TV or in person.
   - also includes watching film, breakdowns, tutorials.
@@ -114,27 +117,26 @@ If they make a joke about an activity such as petting their dog, you should not 
 
 Sometimes a user may send an abbreviated message such as "PT", "lifting", "2.8 miles" without any context.
 Assume that these are valid activities and log them accordingly.
-
-# Text response
-
-You may return a response in the `text_response` field to reply to a user.
-Do not respond to a user unless directly prompted to do so.
 """
 
-previous_response_id = None  # This will be set to the ID of the previous response if needed
+previous_response_id = (
+    None  # This will be set to the ID of the previous response if needed
+)
+llm_lock = asyncio.Lock()
+
 
 def get_llm_response(message: discord.Message) -> Response | None:
     """
     Call the OpenAI API to get the activity type and points based on the message.
     """
     global previous_response_id
-    #previous_response_id = None
+    # previous_response_id = None
 
     instructions = prompt_text if previous_response_id is None else None
 
     message_text = f"""
     User ID: "{message.author.name}"
-    Message date: {message.created_at.strftime('%Y-%m-%d %H:%M:%S')}
+    Message date: {message.created_at.strftime("%Y-%m-%d %H:%M:%S")}
     Message content: "{message.content}"
     """
 
@@ -154,7 +156,9 @@ def get_llm_response(message: discord.Message) -> Response | None:
     previous_response_id = response.id
 
     # log tokens
-    log.info(f"LLM usage: {response.usage}")
+    log.info(
+        f"LLM usage: {response.usage.input_tokens} input tokens, {response.usage.output_tokens} output tokens"
+    )
     # 4o is $2.50 per million input tokens
     input_cost = response.usage.input_tokens * 2.5e-6
     log.debug(f"LLM input cost: ${input_cost:.10f}")
@@ -177,9 +181,15 @@ def record_activity_db(activity: ActivityLogResponse, message_id: int) -> int:
     if limit is None:
         new_points = points
     else:
-        current_points = sum(get_db_points_date_user(activity.activity_type, activity.date, activity.user_id))
+        current_points = sum(
+            get_db_points_date_user(
+                activity.activity_type, activity.date, activity.user_id
+            )
+        )
         new_points = min(limit - current_points, points)
-        log.info(f"Current points: {current_points}, New points: {new_points}, Limit: {limit}")
+        log.info(
+            f"Current points: {current_points}, New points: {new_points}, Limit: {limit}"
+        )
 
     add_db_activity(activity, new_points, message_id)
     return new_points
@@ -190,7 +200,7 @@ def initialize_db() -> None:
     Initialize the database
     """
     with sqlite3.connect(DB_FILE) as conn:
-        conn.execute('''
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS activities (
                 id INTEGER PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -199,39 +209,54 @@ def initialize_db() -> None:
                 activity_type TEXT NOT NULL,
                 points INTEGER NOT NULL
             )
-        ''')
+        """)
 
-def get_db_points_date_user(activity: ActivityType, date: datetime.date, user_id: str) -> list[int]:
+
+def get_db_points_date_user(
+    activity: ActivityType, date: datetime.date, user_id: str
+) -> list[int]:
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT points FROM activities
             WHERE activity_type = ? AND date = ? AND user_id = ?
-        ''', (activity.value, date.isoformat(), user_id))
+        """,
+            (activity.value, date.isoformat(), user_id),
+        )
         return [s[0] for s in cursor.fetchall()]
 
-def add_db_activity(activity: ActivityLogResponse, points: int, message_id: int) -> None:
+
+def add_db_activity(
+    activity: ActivityLogResponse, points: int, message_id: int
+) -> None:
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             INSERT INTO activities (user_id, date, message_id, activity_type, points)
             VALUES (?, ?, ?, ?, ?)
-        ''', (
-            activity.user_id,
-            activity.date.isoformat(),
-            message_id,
-            activity.activity_type.value,
-            points
-        ))
+        """,
+            (
+                activity.user_id,
+                activity.date.isoformat(),
+                message_id,
+                activity.activity_type.value,
+                points,
+            ),
+        )
         conn.commit()
 
 
 def get_db_message_id(message_id: int) -> int | None:
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute(
+            """
             SELECT id FROM activities WHERE message_id = ?
-        ''', (message_id,))
+        """,
+            (message_id,),
+        )
         result = cursor.fetchone()
         return result[0] if result else None
 
@@ -252,17 +277,18 @@ new_points_to_emoji_map = {
     6: "6️⃣",
 }
 
+
 def get_table_of_points() -> str:
     """
     get a table of scores for all users.
     """
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
-        cursor.execute('''
+        cursor.execute("""
             SELECT user_id, SUM(points) FROM activities
             GROUP BY user_id
             ORDER BY SUM(points) DESC
-        ''')
+        """)
         rows = cursor.fetchall()
 
     content = ""
@@ -274,28 +300,35 @@ def get_table_of_points() -> str:
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.reactions = True
+intents.members = True  # Needed for user mentions
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 
 # get messages from the #challenges channel
 @bot.event
 async def on_ready():
-    log.info(f'Logged in as {bot.user} (ID: {bot.user.name})')
+    log.info(f"Logged in as {bot.user} (ID: {bot.user.name})")
 
-    channel = bot.get_channel(1378516451987816538) # challenges channel ID
-    async for message in channel.history(limit=None, after=datetime.datetime(2025, 7, 1)):
+    channel = bot.get_channel(os.getenv("DISCORD_CHANNEL_ID"))  # challenges channel ID
+    async for message in channel.history(
+        limit=None, after=datetime.datetime(2025, 7, 13)
+    ):
         await parse_message(message)
+
 
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    response = await parse_message(message)
-    if response is not None and response.text_response:
-        try:
-            await message.reply(response.text_response)
-        except Exception as e:
-            log.exception(f"An error occurred while replying to message {message.id}: {e}")
+    async with llm_lock:
+        response = await parse_message(message)
+    # if response is not None and response.text_response:
+    #    try:
+    #        await message.reply(response.text_response)
+    #    except Exception as e:
+    #        log.exception(f"An error occurred while replying to message {message.id}: {e}")
 
     await bot.process_commands(message)
 
@@ -305,7 +338,9 @@ async def points(ctx: commands.Context) -> None:
     """
     Command to print the points table in the channel.
     """
-    log.info(f"Points command called by {ctx.author.name} in channel {ctx.channel.name}")
+    log.info(
+        f"Points command called by {ctx.author.name} in channel {ctx.channel.name}"
+    )
     if ctx.channel.name != "challenges":
         await ctx.respond("This command can only be used in the #challenges channel.")
         return
@@ -325,22 +360,24 @@ async def parse_message(message: discord.Message) -> Response | None:
         return
 
     if get_db_message_id(message.id) is not None:
-        log.info(f"!!! Activity with message ID {message.id} already exists in the database. Skipping.")
+        log.info(
+            f"!!! Activity with message ID {message.id} already exists in the database. Skipping."
+        )
         return
 
-
     for user in message.mentions:
-        mention_str = f"<@!{user.id}>" if f"<@!{user.id}>" in message.content else f"<@{user.id}>"
+        mention_str = (
+            f"<@!{user.id}>" if f"<@!{user.id}>" in message.content else f"<@{user.id}>"
+        )
         message.content = message.content.replace(mention_str, f"@{user.name}")
 
-    response = await asyncio.to_thread(
-        get_llm_response,
-        message
-    )
+    response = await asyncio.to_thread(get_llm_response, message)
 
     for activity in response.activities:
         if activity.activity_type == ActivityType.none:
-            log.info(f">>> Skipping activity with type 'none' for user {activity.user_id}, reason: {activity.reason}")
+            log.info(
+                f">>> Skipping activity with type 'none' for user {activity.user_id}, reason: {activity.reason}"
+            )
             add_db_activity(activity, 0, message.id)
             continue
 
@@ -349,18 +386,21 @@ async def parse_message(message: discord.Message) -> Response | None:
             activity,
             message.id,
         )
-        log.info(f"*** Activity logged: {activity.user_id} {activity.date} => {activity.activity_type} + {new_points} points.  Reason: {activity.reason}")
+        log.info(
+            f"*** Activity logged: {activity.user_id} {activity.date} => {activity.activity_type} + {new_points} points.  Reason: {activity.reason}"
+        )
 
         # add emoji reaction to the message
         try:
             activity_emoji = activity_emoji_map.get(activity.activity_type, "❓")
-            #new_points_emoji = new_points_to_emoji_map.get(new_points, "❓")
+            # new_points_emoji = new_points_to_emoji_map.get(new_points, "❓")
             await message.add_reaction(activity_emoji)
-            #await message.add_reaction(new_points_emoji)
+            # await message.add_reaction(new_points_emoji)
         except Exception:
             log.exception(f"Failed to add reaction.")
 
     return response
+
 
 if __name__ == "__main__":
     import sys
@@ -370,7 +410,7 @@ if __name__ == "__main__":
             # show stats from db
             with sqlite3.connect(DB_FILE) as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT * FROM activities')
+                cursor.execute("SELECT * FROM activities")
                 rows = cursor.fetchall()
                 for row in rows:
                     print(row)
