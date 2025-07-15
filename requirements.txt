@@ -1,6 +1,5 @@
 openai
 pydantic
 discord.py
-gspread
 pytest
 python-dotenv
