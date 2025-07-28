@@ -291,17 +291,23 @@ new_points_to_emoji_map = {
 }
 
 
-def get_table_of_points() -> str:
+def get_table_of_points(month: str = None) -> str:
     """
-    get a table of scores for all users.
+    Get a table of scores for all users for a given month.
+    If month is None, use the current month.
+    Month format: "YYYY-MM"
     """
+    if month is None:
+        month = datetime.date.today().strftime("%Y-%m")
+
     with sqlite3.connect(DB_FILE) as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT user_id, SUM(points) FROM activities
+            WHERE strftime('%Y-%m', date) = ?
             GROUP BY user_id
             ORDER BY SUM(points) DESC
-        """)
+        """, (month,))
         rows = cursor.fetchall()
 
     content = ""
