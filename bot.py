@@ -143,7 +143,7 @@ def get_llm_response(message: discord.Message) -> Response | None:
     Call the OpenAI API to get the activity type and points based on the message.
     """
     global previous_response_id
-    # previous_response_id = None
+    previous_response_id = None
 
     instructions = prompt_text if previous_response_id is None else None
 
