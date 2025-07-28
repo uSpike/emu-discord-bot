@@ -394,6 +394,8 @@ async def parse_message(message: discord.Message) -> Response | None:
         )
         message.content = message.content.replace(mention_str, f"@{user.name}")
 
+
+    log.info(f"Processing message {message.id} from {message.author.name}: {message.content}")
     response = await asyncio.to_thread(get_llm_response, message)
 
     for activity in response.activities:
