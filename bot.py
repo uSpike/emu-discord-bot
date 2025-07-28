@@ -329,10 +329,14 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     log.info(f"Logged in as {bot.user} (ID: {bot.user.name})")
 
-    channel = bot.get_channel(os.getenv("DISCORD_CHANNEL_ID"))  # challenges channel ID
-    async for message in channel.history(
-        limit=None, after=datetime.datetime(2025, 7, 13)
-    ):
+    chid = os.getenv("DISCORD_CHANNEL_ID")
+    channel = bot.get_channel(int(chid))
+    if channel is None:
+        log.error("Channel '{}' not found. Please check the channel ID.".format(chid))
+        return
+
+    async for message in channel.history(limit=20):
+        log.info(f"READY Processing message {message.id} from {message.author.name}: {message.content}")
         await parse_message(message)
 
 
